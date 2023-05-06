@@ -25,7 +25,20 @@ const Renderer = forwardRef<IReactVegaHandler, RendererProps>(function (props, r
 
     const [viewData, setViewData] = useState<IRow[]>([]);
 
+    const targetRef = React.useRef<IReactVegaHandler>(null);
+
     useEffect(() => {
+        if (!ref) return;
+
+        if (typeof ref === 'function') {
+            ref(targetRef.current);
+        } else {
+            ref.current = targetRef.current;
+        }
+    }, [ref]);
+
+    useEffect(() => {
+        targetRef.current?.setUnready?.();
         setWaiting(true);
         applyFilter(dataSource, viewFilters)
             .then((data) => transformDataService(data, allFields))
@@ -58,7 +71,7 @@ const Renderer = forwardRef<IReactVegaHandler, RendererProps>(function (props, r
         <SpecRenderer
             loading={waiting}
             data={viewData}
-            ref={ref}
+            ref={targetRef}
             themeKey={themeKey}
             dark={dark}
             draggableFieldState={encodings}

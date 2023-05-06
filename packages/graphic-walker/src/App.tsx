@@ -102,6 +102,10 @@ const App = observer<IGWProps>(function App(props) {
         }
     }, [spec, safeDataset]);
 
+    const darkMode = useCurrentMediaTheme(dark);
+
+    const rendererRef = useRef<IReactVegaHandler>(null);
+
     /** handle spec-change events */
     useEffect(() => {
         const disposer = reaction(
@@ -111,12 +115,16 @@ const App = observer<IGWProps>(function App(props) {
 
             },
             (args, prev, r) => {
+                /** update spec */
+                rendererRef.current?.setUnready();
+                console.log("set Unready", rendererRef.current);
                 const [argsJS, prevJS] = [toJS(args.visSpec), toJS(prev.visSpec)];
                 if (onEvent) {
                     onEvent(new CustomEvent('specChange', {
                         detail: {
                             visSpec: argsJS,
                             prev: prevJS,
+                            rendererRef
                         } as IGWSpecChangeDetail,
                     }) as IGWEvent);
                 }
@@ -125,11 +133,7 @@ const App = observer<IGWProps>(function App(props) {
         return () => {
             disposer();
         }
-    }, [onEvent, vizStore]);
-
-    const darkMode = useCurrentMediaTheme(dark);
-
-    const rendererRef = useRef<IReactVegaHandler>(null);
+    }, [onEvent, vizStore, rendererRef]);
 
     return (
         <div

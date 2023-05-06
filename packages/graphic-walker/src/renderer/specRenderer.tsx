@@ -107,6 +107,7 @@ const SpecRenderer = forwardRef<IReactVegaHandler, SpecRendererProps>(function (
                 onGeomClick={handleGeomClick}
                 themeKey={themeKey}
                 dark={dark}
+                loading={loading}
             />
         </Resizable>
     );

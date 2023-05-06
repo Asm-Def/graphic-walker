@@ -1,6 +1,6 @@
-import React, { useEffect, useState, useMemo, forwardRef, useImperativeHandle, useRef } from 'react';
+import React, { useEffect, useState, useMemo, forwardRef, useImperativeHandle, useRef, MutableRefObject } from 'react';
 import embed from 'vega-embed';
-import { Subject, Subscription } from 'rxjs'
+import { Subject, Subscription, firstValueFrom } from 'rxjs'
 import * as op from 'rxjs/operators';
 import type { ScenegraphEvent, View } from 'vega';
 import styled from 'styled-components';
@@ -21,6 +21,9 @@ const CanvaContainer = styled.div<{rowSize: number; colSize: number;}>`
 
 const SELECTION_NAME = 'geom';
 export interface IReactVegaHandler {
+  setUnready: () => any;
+  setReady: () => any;
+  ready: () => Promise<boolean>;
   getSVGData: () => Promise<string[]>;
   getCanvasData: () => Promise<string[]>;
   downloadSVG: (filename?: string) => Promise<string[]>;
@@ -49,6 +52,7 @@ interface ReactVegaProps {
   /** @default "vega" */
   themeKey?: IThemeKey;
   dark?: IDarkMode;
+  loading?: boolean;
 }
 
 const click$ = new Subject<ScenegraphEvent>();
@@ -96,7 +100,8 @@ const ReactVega = forwardRef<IReactVegaHandler, ReactVegaProps>(function ReactVe
     height,
     details = [],
     themeKey = 'vega',
-    dark = 'media'
+    dark = 'media',
+    loading = false,
   } = props;
   const [viewPlaceholders, setViewPlaceholders] = useState<React.MutableRefObject<HTMLDivElement>[]>([]);
   const { i18n } = useTranslation();
@@ -134,6 +139,7 @@ const ReactVega = forwardRef<IReactVegaHandler, ReactVegaProps>(function ReactVe
   }, [rowRepeatFields, colRepeatFields])
 
   const vegaRefs = useRef<View[]>([]);
+  const ready$ = useRef<Subject<boolean>>(new Subject<boolean>());
 
   useEffect(() => {
     vegaRefs.current = [];
@@ -200,7 +206,8 @@ const ReactVega = forwardRef<IReactVegaHandler, ReactVegaProps>(function ReactVe
 
       if (viewPlaceholders.length > 0 && viewPlaceholders[0].current) {
         embed(viewPlaceholders[0].current, spec, { mode: 'vega-lite', actions: showActions, timeFormatLocale: getVegaTimeFormatRules(i18n.language), config: themeConfig }).then(res => {
-          vegaRefs.current = [res.view];
+          console.log("ready next");
+          ready$.current.next(true);
           try {
             res.view.addEventListener('click', (e) => {
               click$.next(e);
@@ -232,6 +239,7 @@ const ReactVega = forwardRef<IReactVegaHandler, ReactVegaProps>(function ReactVe
         subscriptions.push(throttledParamStore$.subscribe(cb));
       };
       let index = 0;
+      const viewPromises: Promise<any>[] = [], viewResolves: any[] = [];
       for (let i = 0; i < rowRepeatFields.length; i++) {
         for (let j = 0; j < colRepeatFields.length; j++, index++) {
           const sourceId = index;
@@ -263,8 +271,9 @@ const ReactVega = forwardRef<IReactVegaHandler, ReactVegaProps>(function ReactVe
             ans.params = commonSpec.params;
           }
           if (node) {
+            const idx = i * colRepeatFields.length + j;
+            viewPromises[idx] = new Promise((resolve) => { viewResolves[idx] = resolve });
             embed(node, ans, { mode: 'vega-lite', actions: showActions, timeFormatLocale: getVegaTimeFormatRules(i18n.language), config: themeConfig }).then(res => {
-              vegaRefs.current.push(res.view);
               const paramStores = (res.vgSpec.data?.map(d => d.name) ?? []).filter(
                 name => [BRUSH_SIGNAL_NAME, POINT_SIGNAL_NAME].map(p => `${p}_store`).includes(name)
               ).map(name => name.replace(/_store$/, ''));
@@ -319,10 +328,15 @@ const ReactVega = forwardRef<IReactVegaHandler, ReactVegaProps>(function ReactVe
               } catch (error) {
                 console.warn(error);
               }
+              viewResolves[idx]();
+              vegaRefs.current.push(res.view);
             })
           }
         }
       }
+      Promise.all(viewPromises).then(() => {
+        ready$.current.next(true);
+      });
       return () => {
         subscriptions.forEach(sub => sub.unsubscribe());
       };
@@ -354,45 +368,85 @@ const ReactVega = forwardRef<IReactVegaHandler, ReactVegaProps>(function ReactVe
     details
   ]);
 
-  useImperativeHandle(ref, () => ({
-    getSVGData() {
-      return Promise.all(vegaRefs.current.map(view => view.toSVG()));
-    },
-    async getCanvasData() {
-      const canvases = await Promise.all(vegaRefs.current.map(view => view.toCanvas()));
-      return canvases.map(canvas => canvas.toDataURL('image/png'));
-    },
-    async downloadSVG(filename = `gw chart ${Date.now() % 1_000_000}`.padStart(6, '0')) {
-      const data = await Promise.all(vegaRefs.current.map(view => view.toSVG()));
-      const files: string[] = [];
-      for (let i = 0; i < data.length; i += 1) {
-        const d = data[i];
-        const file = new File([d], `${filename}${data.length > 1 ? `_${i + 1}` : ''}.svg`);
-        const url = URL.createObjectURL(file);
-        const a = document.createElement('a');
-        a.download = file.name;
-        a.href = url;
-        a.click();
-        requestAnimationFrame(() => {
-          URL.revokeObjectURL(url);
-        });
-      }
-      return files;
-    },
-    async downloadPNG(filename = `gw chart ${Date.now() % 1_000_000}`.padStart(6, '0')) {
-      const canvases = await Promise.all(vegaRefs.current.map(view => view.toCanvas(2)));
-      const data = canvases.map(canvas => canvas.toDataURL('image/png', 1));
-      const files: string[] = [];
-      for (let i = 0; i < data.length; i += 1) {
-        const d = data[i];
-        const a = document.createElement('a');
-        a.download = `${filename}${data.length > 1 ? `_${i + 1}` : ''}.png`;
-        a.href = d.replace(/^data:image\/[^;]/, 'data:application/octet-stream');
-        a.click();
-      }
-      return files;
-    },
-  }));
+  type resolveLoadingHandler = (success: boolean) => void;
+  const resolveLoadingRef: MutableRefObject<resolveLoadingHandler[]> = useRef<resolveLoadingHandler[]>([]);
+  // useEffect(() => {
+  //   console.log("loading=", loading, resolveLoadingRef.current);
+  //   if (!loading) {
+  //     if (resolveLoadingRef.current.length) {
+  //       const handlers = resolveLoadingRef.current;
+  //       resolveLoadingRef.current = [];
+  //       for (let handler of handlers) handler(true);
+  //     }
+  //   }
+  // }, [loading]);
+
+  useImperativeHandle(ref, () => {
+    return {
+      setUnready() {
+        console.log('setUnready');
+        ready$.current.next(false);
+      },
+      setReady() {
+        console.log('setReady');
+        // ready$.current.next(true);
+      },
+      ready(): Promise<boolean> {
+        console.log("get Ready?", ready$.current, loading);
+        return firstValueFrom(ready$.current.pipe(
+          op.startWith(false),
+          op.first((state: boolean) => state),
+        ));
+        // return new Promise((resolve, reject) => {
+        //   
+        //   if (loading) {
+        //     resolveLoadingRef.current.push((state: boolean) => {
+        //       console.log("resolve: ready, loading = ", loading);
+        //       resolve(state);
+        //     });
+        //   }
+        //   else resolve(true);
+        // });
+      },
+      getSVGData() {
+        return Promise.all(vegaRefs.current.map(view => view.toSVG()));
+      },
+      async getCanvasData() {
+        const canvases = await Promise.all(vegaRefs.current.map(view => view.toCanvas()));
+        return canvases.map(canvas => canvas.toDataURL('image/png'));
+      },
+      async downloadSVG(filename = `gw chart ${Date.now() % 1_000_000}`.padStart(6, '0')) {
+        const data = await Promise.all(vegaRefs.current.map(view => view.toSVG()));
+        const files: string[] = [];
+        for (let i = 0; i < data.length; i += 1) {
+          const d = data[i];
+          const file = new File([d], `${filename}${data.length > 1 ? `_${i + 1}` : ''}.svg`);
+          const url = URL.createObjectURL(file);
+          const a = document.createElement('a');
+          a.download = file.name;
+          a.href = url;
+          a.click();
+          requestAnimationFrame(() => {
+            URL.revokeObjectURL(url);
+          });
+        }
+        return files;
+      },
+      async downloadPNG(filename = `gw chart ${Date.now() % 1_000_000}`.padStart(6, '0')) {
+        const canvases = await Promise.all(vegaRefs.current.map(view => view.toCanvas(2)));
+        const data = canvases.map(canvas => canvas.toDataURL('image/png', 1));
+        const files: string[] = [];
+        for (let i = 0; i < data.length; i += 1) {
+          const d = data[i];
+          const a = document.createElement('a');
+          a.download = `${filename}${data.length > 1 ? `_${i + 1}` : ''}.png`;
+          a.href = d.replace(/^data:image\/[^;]/, 'data:application/octet-stream');
+          a.click();
+        }
+        return files;
+      },
+    };
+  });
 
   return <CanvaContainer rowSize={Math.max(rowRepeatFields.length, 1)} colSize={Math.max(colRepeatFields.length, 1)}>
     {/* <div ref={container}></div> */}

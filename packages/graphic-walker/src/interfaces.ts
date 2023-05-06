@@ -1,3 +1,5 @@
+import { IReactVegaHandler } from "./vis/react-vega";
+
 export type DeepReadonly<T extends Record<keyof any, any>> = {
     readonly [K in keyof T]: T[K] extends Record<keyof any, any> ? DeepReadonly<T[K]> : T[K];
 };
@@ -216,6 +218,7 @@ export type IDarkMode = 'media' | 'light' | 'dark';
 export interface IGWSpecChangeDetail {
     visSpec: IVisSpec[];
     prev: IVisSpec[];
+    rendererRef: React.MutableRefObject<IReactVegaHandler>;
 }
 export interface IGWSpecChangeEvent extends CustomEvent<IGWSpecChangeDetail> {
     type: 'specChange';
